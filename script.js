@@ -1,155 +1,172 @@
-const chatInput = document.querySelector("#chat-input");
-const sendButton = document.querySelector("#send-btn");
-const chatContainer = document.querySelector(".chat-container");
-const themeButton = document.querySelector("#theme-btn");
-const deleteButton = document.querySelector("#delete-btn");
+const typingForm = document.querySelector(".typing-form");
+const chatContainer = document.querySelector(".chat-list");
+const suggestions = document.querySelectorAll(".suggestion");
+const toggleThemeButton = document.querySelector("#theme-toggle-button");
+const deleteChatButton = document.querySelector("#delete-chat-button");
 
-let userText = null;
-const API_KEY ='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;' // Paste your API key here
+// State variables
+let userMessage = null;
+let isResponseGenerating = false;
 
+// API configuration
+const API_KEY = "AIzaSyBBOFFZc_nuaezcaPwx0hc40wcx6sp1HTc"; // Your API key here
+const API_URL = `https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=${API_KEY}`;
+
+// Load theme and chat data from local storage on page load
 const loadDataFromLocalstorage = () => {
-    // Load saved chats and theme from local storage and apply/add on the page
-    const themeColor = localStorage.getItem("themeColor");
+  const savedChats = localStorage.getItem("saved-chats");
+  const isLightMode = (localStorage.getItem("themeColor") === "light_mode");
 
-    document.body.classList.toggle("light-mode", themeColor === "light_mode");
-    themeButton.innerText = document.body.classList.contains("light-mode") ? "dark_mode" : "light_mode";
+  // Apply the stored theme
+  document.body.classList.toggle("light_mode", isLightMode);
+  toggleThemeButton.innerText = isLightMode ? "dark_mode" : "light_mode";
 
-    const defaultText = `<div class="default-text">
-                            <h1>ChatGPT Clone</h1>
-                            <p>Start a conversation and explore the power of AI.<br> Your chat history will be displayed here.</p>
-                        </div>`
+  // Restore saved chats or clear the chat container
+  chatContainer.innerHTML = savedChats || '';
+  document.body.classList.toggle("hide-header", savedChats);
 
-    chatContainer.innerHTML = localStorage.getItem("all-chats") || defaultText;
-    chatContainer.scrollTo(0, chatContainer.scrollHeight); // Scroll to bottom of the chat container
+  chatContainer.scrollTo(0, chatContainer.scrollHeight); // Scroll to the bottom
 }
 
-const createChatElement = (content, className) => {
-    // Create new div and apply chat, specified class and set html content of div
-    const chatDiv = document.createElement("div");
-    chatDiv.classList.add("chat", className);
-    chatDiv.innerHTML = content;
-    return chatDiv; // Return the created chat div
+// Create a new message element and return it
+const createMessageElement = (content, ...classes) => {
+  const div = document.createElement("div");
+  div.classList.add("message", ...classes);
+  div.innerHTML = content;
+  return div;
 }
 
-const getChatResponse = async (incomingChatDiv) => {
-    const API_URL = "https://api.openai.com/v1/completions";
-    const pElement = document.createElement("p");
+// Show typing effect by displaying words one by one
+const showTypingEffect = (text, textElement, incomingMessageDiv) => {
+  const words = text.split(' ');
+  let currentWordIndex = 0;
 
-    // Define the properties and data for the API request
-    const requestOptions = {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${API_KEY}`
-        },
-        body: JSON.stringify({
-            model: "text-davinci-003",
-            prompt: userText,
-            max_tokens: 2048,
-            temperature: 0.2,
-            n: 1,
-            stop: null
-        })
+  const typingInterval = setInterval(() => {
+    // Append each word to the text element with a space
+    textElement.innerText += (currentWordIndex === 0 ? '' : ' ') + words[currentWordIndex++];
+    incomingMessageDiv.querySelector(".icon").classList.add("hide");
+
+    // If all words are displayed
+    if (currentWordIndex === words.length) {
+      clearInterval(typingInterval);
+      isResponseGenerating = false;
+      incomingMessageDiv.querySelector(".icon").classList.remove("hide");
+      localStorage.setItem("saved-chats", chatContainer.innerHTML); // Save chats to local storage
     }
-
-    // Send POST request to API, get response and set the reponse as paragraph element text
-    try {
-        const response = await (await fetch(API_URL, requestOptions)).json();
-        pElement.textContent = response.choices[0].text.trim();
-    } catch (error) { // Add error class to the paragraph element and set error text
-        pElement.classList.add("error");
-        pElement.textContent = "Oops! Something went wrong while retrieving the response. Please try again.";
-    }
-
-    // Remove the typing animation, append the paragraph element and save the chats to local storage
-    incomingChatDiv.querySelector(".typing-animation").remove();
-    incomingChatDiv.querySelector(".chat-details").appendChild(pElement);
-    localStorage.setItem("all-chats", chatContainer.innerHTML);
-    chatContainer.scrollTo(0, chatContainer.scrollHeight);
+    chatContainer.scrollTo(0, chatContainer.scrollHeight); // Scroll to the bottom
+  }, 75);
 }
 
-const copyResponse = (copyBtn) => {
-    // Copy the text content of the response to the clipboard
-    const reponseTextElement = copyBtn.parentElement.querySelector("p");
-    navigator.clipboard.writeText(reponseTextElement.textContent);
-    copyBtn.textContent = "done";
-    setTimeout(() => copyBtn.textContent = "content_copy", 1000);
+// Fetch response from the API based on user message
+const generateAPIResponse = async (incomingMessageDiv) => {
+  const textElement = incomingMessageDiv.querySelector(".text"); // Getting text element
+
+  try {
+    // Send a POST request to the API with the user's message
+    const response = await fetch(API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ 
+        contents: [{ 
+          role: "user", 
+          parts: [{ text: userMessage }] 
+        }] 
+      }),
+    });
+
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error.message);
+
+    // Get the API response text and remove asterisks from it
+    const apiResponse = data?.candidates[0].content.parts[0].text.replace(/\*\*(.*?)\*\*/g, '$1');
+    showTypingEffect(apiResponse, textElement, incomingMessageDiv); // Show typing effect
+  } catch (error) { // Handle error
+    isResponseGenerating = false;
+    textElement.innerText = error.message;
+    textElement.parentElement.closest(".message").classList.add("error");
+  } finally {
+    incomingMessageDiv.classList.remove("loading");
+  }
 }
 
-const showTypingAnimation = () => {
-    // Display the typing animation and call the getChatResponse function
-    const html = `<div class="chat-content">
-                    <div class="chat-details">
-                        <img src="images/chatbot.jpg" alt="chatbot-img">
-                        <div class="typing-animation">
-                            <div class="typing-dot" style="--delay: 0.2s"></div>
-                            <div class="typing-dot" style="--delay: 0.3s"></div>
-                            <div class="typing-dot" style="--delay: 0.4s"></div>
-                        </div>
-                    </div>
-                    <span onclick="copyResponse(this)" class="material-symbols-rounded">content_copy</span>
-                </div>`;
-    // Create an incoming chat div with typing animation and append it to chat container
-    const incomingChatDiv = createChatElement(html, "incoming");
-    chatContainer.appendChild(incomingChatDiv);
-    chatContainer.scrollTo(0, chatContainer.scrollHeight);
-    getChatResponse(incomingChatDiv);
+// Show a loading animation while waiting for the API response
+const showLoadingAnimation = () => {
+  const html = `<div class="message-content">
+                  <img class="avatar" src="images/gemini.svg" alt="Gemini avatar">
+                  <p class="text"></p>
+                  <div class="loading-indicator">
+                    <div class="loading-bar"></div>
+                    <div class="loading-bar"></div>
+                    <div class="loading-bar"></div>
+                  </div>
+                </div>
+                <span onClick="copyMessage(this)" class="icon material-symbols-rounded">content_copy</span>`;
+
+  const incomingMessageDiv = createMessageElement(html, "incoming", "loading");
+  chatContainer.appendChild(incomingMessageDiv);
+
+  chatContainer.scrollTo(0, chatContainer.scrollHeight); // Scroll to the bottom
+  generateAPIResponse(incomingMessageDiv);
 }
 
+// Copy message text to the clipboard
+const copyMessage = (copyButton) => {
+  const messageText = copyButton.parentElement.querySelector(".text").innerText;
+
+  navigator.clipboard.writeText(messageText);
+  copyButton.innerText = "done"; // Show confirmation icon
+  setTimeout(() => copyButton.innerText = "content_copy", 1000); // Revert icon after 1 second
+}
+
+// Handle sending outgoing chat messages
 const handleOutgoingChat = () => {
-    userText = chatInput.value.trim(); // Get chatInput value and remove extra spaces
-    if(!userText) return; // If chatInput is empty return from here
+  userMessage = typingForm.querySelector(".typing-input").value.trim() || userMessage;
+  if(!userMessage || isResponseGenerating) return; // Exit if there is no message or response is generating
 
-    // Clear the input field and reset its height
-    chatInput.value = "";
-    chatInput.style.height = `${initialInputHeight}px`;
+  isResponseGenerating = true;
 
-    const html = `<div class="chat-content">
-                    <div class="chat-details">
-                        <img src="images/user.jpg" alt="user-img">
-                        <p>${userText}</p>
-                    </div>
+  const html = `<div class="message-content">
+                  <img class="avatar" src="images/user.jpg" alt="User avatar">
+                  <p class="text"></p>
                 </div>`;
 
-    // Create an outgoing chat div with user's message and append it to chat container
-    const outgoingChatDiv = createChatElement(html, "outgoing");
-    chatContainer.querySelector(".default-text")?.remove();
-    chatContainer.appendChild(outgoingChatDiv);
-    chatContainer.scrollTo(0, chatContainer.scrollHeight);
-    setTimeout(showTypingAnimation, 500);
+  const outgoingMessageDiv = createMessageElement(html, "outgoing");
+  outgoingMessageDiv.querySelector(".text").innerText = userMessage;
+  chatContainer.appendChild(outgoingMessageDiv);
+  
+  typingForm.reset(); // Clear input field
+  document.body.classList.add("hide-header");
+  chatContainer.scrollTo(0, chatContainer.scrollHeight); // Scroll to the bottom
+  setTimeout(showLoadingAnimation, 500); // Show loading animation after a delay
 }
 
-deleteButton.addEventListener("click", () => {
-    // Remove the chats from local storage and call loadDataFromLocalstorage function
-    if(confirm("Are you sure you want to delete all the chats?")) {
-        localStorage.removeItem("all-chats");
-        loadDataFromLocalstorage();
-    }
+// Toggle between light and dark themes
+toggleThemeButton.addEventListener("click", () => {
+  const isLightMode = document.body.classList.toggle("light_mode");
+  localStorage.setItem("themeColor", isLightMode ? "light_mode" : "dark_mode");
+  toggleThemeButton.innerText = isLightMode ? "dark_mode" : "light_mode";
 });
 
-themeButton.addEventListener("click", () => {
-    // Toggle body's class for the theme mode and save the updated theme to the local storage 
-    document.body.classList.toggle("light-mode");
-    localStorage.setItem("themeColor", themeButton.innerText);
-    themeButton.innerText = document.body.classList.contains("light-mode") ? "dark_mode" : "light_mode";
+// Delete all chats from local storage when button is clicked
+deleteChatButton.addEventListener("click", () => {
+  if (confirm("Are you sure you want to delete all the chats?")) {
+    localStorage.removeItem("saved-chats");
+    loadDataFromLocalstorage();
+  }
 });
 
-const initialInputHeight = chatInput.scrollHeight;
-
-chatInput.addEventListener("input", () => {   
-    // Adjust the height of the input field dynamically based on its content
-    chatInput.style.height =  `${initialInputHeight}px`;
-    chatInput.style.height = `${chatInput.scrollHeight}px`;
+// Set userMessage and handle outgoing chat when a suggestion is clicked
+suggestions.forEach(suggestion => {
+  suggestion.addEventListener("click", () => {
+    userMessage = suggestion.querySelector(".text").innerText;
+    handleOutgoingChat();
+  });
 });
 
-chatInput.addEventListener("keydown", (e) => {
-    // If the Enter key is pressed without Shift and the window width is larger 
-    // than 800 pixels, handle the outgoing chat
-    if (e.key === "Enter" && !e.shiftKey && window.innerWidth > 800) {
-        e.preventDefault();
-        handleOutgoingChat();
-    }
+// Prevent default form submission and handle outgoing chat
+typingForm.addEventListener("submit", (e) => {
+  e.preventDefault(); 
+  handleOutgoingChat();
 });
 
 loadDataFromLocalstorage();
-sendButton.addEventListener("click", handleOutgoingChat);
